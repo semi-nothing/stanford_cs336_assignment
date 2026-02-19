@@ -13,17 +13,29 @@ bytes.decode("utf-8") -> str
 """
 
 from collections import defaultdict
+from functools import wraps
 
+import math
+import time
+import pickle
+import pstats
+import cProfile
 import regex as re
 import matplotlib.pyplot as plt
 
+# from pretokenization_example import find_chunk_boundaries
 
-def print_dict(d):
-    count = 0
-    for k, v in d.items():
-        count += len(k) * v
-        print(k, v)
-    return count
+
+def timeit(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        result = func(*args, **kwargs)
+        end = time.perf_counter()
+        print(f"{func.__name__} took {end-start:.6f} seconds.")
+        return result
+    return wrapper
+
 
 class BytePairEncodeToken(object):
 
@@ -34,8 +46,11 @@ class BytePairEncodeToken(object):
     def __init__(self):
         self._init_vocab()
         self.pre_token_regex = re.compile(r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
+        self.special_tokens =  ["<|endoftext|>"]
+        self.special_token_regex = re.compile("(" + "|".join(map(re.escape, self.special_tokens)) + ")")
 
-    def build_reverse_vocab(self) -> dict[int, str]:
+    @timeit
+    def build_reverse_vocab(self) -> dict[int, tuple[int]]:
         return {v: k for k, v in self.vocab.items()}
 
     def _init_vocab(self) -> None:
@@ -43,47 +58,70 @@ class BytePairEncodeToken(object):
         Initilize the vocabulary with 256 byte tokens and a special end of text token. 
         This will be used to encode the pre-tokenized corpus into byte pairs.
         """
-        self.vocab = {bytes([i]): i for i in range(256)}
-        self.vocab[b"<|endoftext|>"] = 256
+        self.vocab = {i: i for i in range(257)} # 0-255 UTF-8 encoding code, 256 special token
+        # self.vocab[b"<|endoftext|>"] = 256
     
-    def _count_pairs(self, tokens_freq: dict[tuple[bytes], int]) -> dict[tuple[bytes], int]:
+    def _count_pairs(self, tokens_freq: dict[tuple[int], int]) -> dict[tuple[int], int]:
         """
         Count frequency of adjacent byte pairs based on the pre-tokenized tokens frequency.
         
         :param tokens_freq: pre-tokenized tokens with their frequences in the corpus.
-        :type tokens_freq: dict[tuple[bytes], int]
+        :type tokens_freq: dict[tuple[int], int]
         :return: list of byte pairs and their frequencies, sorted by frequency in frequence descending order and lexicographically descending order.
-        :rtype: list[tuple[str, int]]
+        :rtype: dict[tuple[int], int]
         """
         
         pairs = defaultdict(int)
-        for token_bt, freq in tokens_freq.items():
-            for pair in zip(token_bt, token_bt[1:]):
+        for token_bs, freq in tokens_freq.items():
+            for pair in zip(token_bs, token_bs[1:]):
                 pairs[pair] += freq
         return pairs
     
-    def pre_tokenize(self, corpus: list[str]) -> dict[tuple[bytes], int]:
+    def pre_tokenize(self, text: str) -> list[tuple[int]]:
         """
         Pre-tokenize the corpus using a regex pattern that captures words, numbers, punctuation, and whitespace. 
         The regex pattern is designed to match common tokenization rules, including contractions and special characters.
         which with be used to accelerate the pairs counting.
 
+        :param text: Description
+        :return: tokens
+        :rtype: list[tuple[int]]
+        """
+        # process special token
+        parts = self.special_token_regex.split(text)
+        res = []
+        for part in parts:
+            if part not in self.special_tokens:
+                tokens = self.pre_token_regex.finditer(part)
+                for token in tokens:
+                    bs = tuple(token.group().encode("utf-8")) # UTF-8 byte coding list
+                    res.append(bs)
+            else:
+                res.append((256,))
+        return res
+
+    @timeit
+    def get_stats(self, corpus: list[str]) -> dict[tuple[int], int]:
+        """
+        get_stats is to calculate tokens frequency based on the output of pre_tokenize.
+
         :param corpus: Description
-        :return: tokens with their frequencies in the corpus
-        :rtype: dict
+        :return: tokens with frequency
+        :rtype: dict[tuple[int], int]
         """
         tokens_freq = defaultdict(int)
         token_num = 0
         for text in corpus:
-            tokens = self.pre_token_regex.finditer(text)
-            for token in tokens:
-                bs = token.group().encode("utf-8")
-                token_bytes = tuple(bs[i:i+1] for i in range(len(bs)))
-                tokens_freq[token_bytes] += 1
-                token_num += len(token_bytes)
+            bss = self.pre_tokenize(text)
+            for bs in bss:
+                if bs == (256,): continue # pass special token
+                tokens_freq[bs] += 1
+                token_num += len(bs)
+            else:
+                continue
         return tokens_freq, token_num
     
-    def merge_pair(self, token: tuple[bytes], a: bytes, b: bytes) -> tuple[bytes]:
+    def merge_pair(self, token: tuple[int], a: int, b: int, z: int) -> tuple[int]:
         """
         Merge a pair of bytes (a, b) into a new token in the given token tuple.
         
@@ -100,47 +138,43 @@ class BytePairEncodeToken(object):
         i = 0
         while i < len(token):
             if i < len(token) - 1 and token[i] == a and token[i + 1] == b:
-                new_token.append(a+b)
+                new_token.append(z)
                 i += 2
             else:
                 new_token.append(token[i])
                 i += 1
         return tuple(new_token)
 
-    def merge(self, best_pair: tuple[bytes], tokens_freq: dict[tuple[bytes], int]) -> dict[tuple[bytes], int]:
+    def merge(self, best_pair: tuple[int], tokens_freq: dict[tuple[int], int]) -> dict[tuple[int], int]:
         """
         Update the tokens_frequency by merging the best pair into a new token.
         Update the vocabulary including the new token.
         
         :param best_pair: most frequent byte pair to be merged into a new token, represented as a tuple of two bytes.
-        :type best_pair: tuple[bytes]
+        :type best_pair: tuple[int]
         :param tokens_freq: pre-tokenized tokens with their frequences in the corpus, represented as a dictionary where 
         keys are tuples of bytes and values are their corresponding frequencies.
-        :type tokens_freq: dict[tuple[bytes], int]
+        :type tokens_freq: dict[tuple[int], int]
         :return: updated tokens frequency dictionary with the best pair merged into a new token.
-        :rtype: dict[tuple[bytes], int]
+        :rtype: dict[tuple[int], int]
         """
-        # update tokens frequence by merging the best pair into a new token and updating the frequencies accordingly.
-        new_tokens_freq = defaultdict(int)
-        token_num = 0
-        for token_bt, freq in tokens_freq.items():
-            new_token = self.merge_pair(token_bt, best_pair[0], best_pair[1])
-            new_tokens_freq[new_token] = new_tokens_freq[new_token] + freq
-            token_num += len(new_token) * freq
         # update the vocabulary with the new token
-        new_token_str = best_pair[0] + best_pair[1]
-        self.vocab[new_token_str] = len(self.vocab)
+        new_tokens_freq = defaultdict(int)
+        new_token = (best_pair[0], best_pair[1])
+        self.vocab[new_token] = len(self.vocab)
+         # update tokens frequence by merging the best pair into a new token and updating the frequencies accordingly.
+        token_num = 0
+        for token_bs, freq in tokens_freq.items():
+            new_token_bs = self.merge_pair(token_bs, best_pair[0], best_pair[1], self.vocab[new_token])
+            new_tokens_freq[new_token_bs] = new_tokens_freq[new_token_bs] + freq
+            token_num += len(new_token_bs) * freq
         return new_tokens_freq, token_num
     
-    def train(self, corpus: list[str], num_merges: int) -> None:
-        tokens_freq, init_token_num = self.pre_tokenize(corpus)
+    @timeit
+    def train(self, corpus: list[str], num_merges: int) -> list[float]:
+        tokens_freq, init_token_num = self.get_stats(corpus)
         compression_ratio = []
-        # tmp_count = print_dict(tokens_freq)
         token_num = init_token_num
-        # if tmp_count == token_num:
-        #     print(f"[1] Same token num {token_num} = {tmp_count}")
-        # else:
-        #     print(f"[1] Error token num {token_num} = {tmp_count}")
         for _ in range(num_merges):
             pairs_freq = self._count_pairs(tokens_freq)
             if not pairs_freq:
@@ -150,15 +184,10 @@ class BytePairEncodeToken(object):
             # best_pair, freq = max(pairs_freq.items(), key=lambda item: (item[1], item[0][0], item[0][1]))
             print("Current are merging:", best_pair, best_pair_freq)
             tokens_freq, new_token_num = self.merge(best_pair, tokens_freq)
-            # tmp_count = print_dict(tokens_freq)
-            # if tmp_count == new_token_snum:
-            #     print(f"[2] Same token num {new_token_num} = {tmp_count}")
-            # else:
-            #     print(f"[2] Error token num {new_token_num} = {tmp_count}")
             # print("Calculated token reduced: ", best_pair_freq)
             # print("Real token reduced: ", token_num - new_token_num)
             compression_ratio.append((init_token_num*1.0)/new_token_num)
-            print("Compression ratio: ", (init_token_num*1.0)/new_token_num)
+            # print("Compression ratio: ", (init_token_num*1.0)/new_token_num)
             token_num = new_token_num
         self.id_to_token = self.build_reverse_vocab()
         return compression_ratio
@@ -171,9 +200,8 @@ class BytePairEncodeToken(object):
         :param file_path: path to the file where the vocabulary will be saved.
         :type file_path: str
         """
-        with open(file_path, "w+", encoding="utf-8") as f:
-            for token, id_ in self.vocab.items():
-                f.write(f"{token.decode('utf-8', errors='ignore')}\t{id_}\n")
+        with open(file_path, "wb") as f:
+            pickle.dump(self.vocab, f)
 
     def load_vocab(self, file_path: str) -> None:
         """
@@ -184,10 +212,8 @@ class BytePairEncodeToken(object):
         :type file_path: str
         """
         self.vocab = {}
-        with open(file_path, "r", encoding="utf-8") as f:
-            for line in f:
-                token, id = line.strip().split("\t")
-                self.vocab[token.encode("utf-8")] = int(id)
+        with open(file_path, "rb") as f:
+            self.vocab = pickle.load(f)
         self.id_to_token = self.build_reverse_vocab()
     
     def encode(self, text: str) -> list[int]:
@@ -200,20 +226,34 @@ class BytePairEncodeToken(object):
         :rtype: list[int]
         """
 
-        tokens = self.pre_token_regex.finditer(text)
+        tokens = self.pre_tokenize(text)
         ids = []
-        for token in tokens:
-            bs = token.group().encode("utf-8")
-            cur_bytes = tuple(bs[i:i+1] for i in range(len(bs)))
-            while True:
-                pairs = [pair for pair in zip(cur_bytes, cur_bytes[1:])]
-                candidates = [(self.vocab.get(pair[0]+pair[1]), pair) for pair in pairs if pair[0]+pair[1] in self.vocab]
-                if not candidates:
-                    break
-                _, (a,b) = min(candidates)
-                cur_bytes = self.merge_pair(cur_bytes, a, b)
-            ids.extend([self.vocab[b] for b in cur_bytes])
+        for bs in tokens:
+            if bs != (256,):
+                while True:
+                    pairs = [pair for pair in zip(bs, bs[1:])]
+                    candidates = [(self.vocab.get(pair), pair) for pair in pairs if pair in self.vocab]
+                    if not candidates:
+                        break
+                    idx, (a,b) = min(candidates)
+                    bs = self.merge_pair(bs, a, b, idx)
+            ids.extend(bs)
         return ids
+
+    def decode_id(self, id_):
+        res = []
+
+        def dfs(id_):
+            bs = self.id_to_token[id_]
+            if isinstance(bs, int):
+                res.append(bs)
+                return
+            dfs(bs[0])
+            dfs(bs[1])
+
+        dfs(id_)
+
+        return res
 
     def decode(self, ids: list[int]) -> str:
         """
@@ -224,9 +264,10 @@ class BytePairEncodeToken(object):
         :return: decoded string from the input token ids.
         :rtype: str
         """
-
-        bytes_list = [self.id_to_token[id] for id in ids]
-        return b"".join(bytes_list).decode("utf-8", errors="strict")
+        bs = []
+        for id_ in ids:
+            bs.extend(self.decode_id(id_))
+        return "".join([chr(b) if b != 256 else "<|endoftext|>" for b in bs])
 
 
 def plot_fig(X, Y):
@@ -236,26 +277,52 @@ def plot_fig(X, Y):
     plt.ylabel("Compression ratio")
     plt.title("Compression Ratio vs Number of merges")
     plt.show()
-    plt.savefig("./compression_ratio_vs_merge.png")
+    plt.savefig("./compression_ratio_vs_merge_v1.png")
 
+@timeit
+def load_data(file_path:str) -> list[str]:
+    count = 0
+    data = []
+    with open(file_path, "rb") as in_file:
+        for line in in_file:
+            # if count > 100: break
+            data.extend(line.decode("utf-8", errors="ignore").split("\n"))
+            count += 1
+    return data
 
 # Test
 if __name__ == "__main__":
-    data = []
-    # count  = 0
+    # monitor the function cost
+    profiler = cProfile.Profile()
+    profiler.enable()
+
     num_merge = 10000
-    with open("../data/TinyStoriesV2-GPT4-train.txt", "r") as in_file:
-        for line in in_file:
-            # if count > 10: break
-            data.append(line.strip())
-            # count += 1
+    data = load_data("../data/TinyStoriesV2-GPT4-train.txt")
 
     tokcli = BytePairEncodeToken()
+    tokens_freq, init_token_num = tokcli.get_stats(data)
+    with open("serialize_token_freq.txt", "w+") as out_file:
+        for k, v in tokens_freq.items():
+            out_file.write(f"{k}\t{v}\n")
+    print(init_token_num)
+    exit(0)
+    # unit test
+    # print(list("Hello World! ".encode("utf-8")) + [256] + list(" a good day!".encode("utf-8")))
+    print("Before training: ", tokcli.encode("Hello World! <|endoftext|> a good day!"))
+    tokcli.id_to_token = tokcli.build_reverse_vocab()
+    print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World! <|endoftext|> a good day!")))
     compression_ratio = tokcli.train(data, num_merge)
-    tokcli.save_vocab("./test_train.txt")
+    print("After training: ", tokcli.encode("Hello World! a good day!"))
+    print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World! <|endoftext|> a good day!")))
+    tokcli.save_vocab("./test_train_v1.txt")
 
     # plot the compression ratio with merge
-    num_merges = list(range(1, num_merge+1, 1))
+    real_num_merge = len(compression_ratio)
+    print(f"Expect {num_merge} merges, but actually did {real_num_merge} merges.")
+    num_merges = list(range(1, real_num_merge+1, 1))
     plot_fig(num_merges, compression_ratio)
+
+    profiler.disable()
+    profiler.dump_stats("profile.prof")
 
         
