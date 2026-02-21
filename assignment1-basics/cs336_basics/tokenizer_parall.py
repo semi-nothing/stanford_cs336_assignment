@@ -25,7 +25,7 @@ import regex as re
 import matplotlib.pyplot as plt
 from concurrent.futures import ProcessPoolExecutor
 
-from pretokenization_example import find_chunk_boundaries
+from pretokenization_example import find_chunk_boundaries, find_chunk_boundaries_2
 
 
 def timeit(func):
@@ -102,7 +102,7 @@ class BytePairEncodeToken(object):
                 res.append((256,))
         return res
 
-    @timeit
+    # @timeit
     def get_stats(self, corpus: list[str]) -> dict[tuple[int], int]:
         """
         get_stats is to calculate tokens frequency based on the output of pre_tokenize.
@@ -173,11 +173,9 @@ class BytePairEncodeToken(object):
         return new_tokens_freq, token_num
     
     @timeit
-    def train(self, corpus: list[str], num_merges: int, tokens_freq: dict[tuple[bytes], int]=None) -> list[float]:
+    def train(self, corpus: list[str], num_merges: int, tokens_freq: dict[tuple[bytes], int]=None, init_token_num: int=None) -> list[float]:
         if tokens_freq is None:
             tokens_freq, init_token_num = self.get_stats(corpus)
-        else:
-            init_token_num = sum(list(tokens_freq.values()))
         compression_ratio = []
         token_num = init_token_num
         for _ in range(num_merges):
@@ -272,17 +270,17 @@ class BytePairEncodeToken(object):
         bs = []
         for id_ in ids:
             bs.extend(self.decode_id(id_))
-        return "".join([chr(b) if b != 256 else "<|endoftext|>" for b in bs])
+        return b"".join(bytes([self.id_to_token[b]]) if b != 256 else b"<|endoftext|>" for b in bs).decode("utf-8", errors="strict")
 
 
-def plot_fig(X, Y):
+def plot_fig(X, Y, dataset_name):
     plt.figure()
     plt.plot(X, Y)
     plt.xlabel("Number of merges")
     plt.ylabel("Compression ratio")
-    plt.title("Compression Ratio vs Number of merges")
+    plt.title(f"Compression Ratio vs Number of merges on {dataset_name}")
     plt.show()
-    plt.savefig("./compression_ratio_vs_merge_v1.png")
+    plt.savefig(f"./{dataset_name}_compression_ratio_vs_merge_parall.png")
 
 @timeit
 def load_data(file_path:str) -> list[str]:
@@ -305,6 +303,25 @@ def do_work(tokenizer, file_path: str, s: int, e: int, chunk_id: int):
     tokens_freq, token_num = tokenizer.get_stats(cur_corpus)
     return {"chunk_id": chunk_id, "tokens_freq": tokens_freq, "token_num": token_num}
 
+def do_work_parallel(tokenizer, file_path: str, s: int, e: int, chunk_id: int):
+    with open(file_path, "rb") as f:
+        boundaries = find_chunk_boundaries_2(f, 8, s, e, b"<|endoftext|>")
+        print(chunk_id, boundaries)
+    
+        for (cur_s, cur_e) in zip(boundaries, boundaries[1:]):
+            f.seek(cur_s)
+            chunk = f.read(cur_e - cur_s).decode("utf-8", errors="ignore")
+            cur_corpus = chunk.split("\n")
+            tokens_freq, token_num = tokenizer.get_stats(cur_corpus)
+            if cur_s == boundaries[0]:
+                tokens_freq_total = Counter(tokens_freq)
+                token_num_total = token_num
+            else:
+                tokens_freq_total.update(Counter(tokens_freq))
+                token_num_total += token_num
+    
+    return {"chunk_id": chunk_id, "tokens_freq": tokens_freq_total, "token_num": token_num_total}
+
 # Test
 if __name__ == "__main__":
     # monitor the function cost
@@ -314,8 +331,12 @@ if __name__ == "__main__":
     tokcli = BytePairEncodeToken()
 
     # parallel
-    num_processes = 4
-    file_path = "../data/TinyStoriesV2-GPT4-train.txt"
+    num_processes = 8
+    # file_path = "../data/TinyStoriesV2-GPT4-train.txt"
+    # dataset_name = "tinystory"
+    file_path = "../data/owt_train.txt"
+    dataset_name = "owt"
+
     with open(file_path, "rb") as f:
         f.seek(0, os.SEEK_END)
         file_size = f.tell()
@@ -329,7 +350,7 @@ if __name__ == "__main__":
     with ProcessPoolExecutor(max_workers=num_processes) as ex:
         results = list(
             ex.map(
-                do_work,
+                do_work_parallel,
                 [tokcli] * num_processes,
                 [file_path] * num_processes,
                 [s for s, _ in ranges],
@@ -338,37 +359,54 @@ if __name__ == "__main__":
             )
         )
     # merge
+    init_token_num = 0
     for i, r in enumerate(results):
+        init_token_num += r["token_num"]
         if i == 0:
             tokens_freq = Counter(r["tokens_freq"])
         else:
             tokens_freq += Counter(r["tokens_freq"])
     tokens_freq = dict(tokens_freq)
-    with open("parallel_token_freq.txt", "w+") as out_file:
-        for k, v in tokens_freq.items():
-            out_file.write(f"{k}\t{v}\n")
-    print(sum([len(k)*v for k, v in tokens_freq.items()]))
-    print(sum([r["token_num"] for r in results]))
-    exit(0)
+
+    # # test to verify the init token freq is consistent between serial and parallel
+    # with open("parallel_token_freq.txt", "w+") as out_file:
+    #     for k, v in tokens_freq.items():
+    #         out_file.write(f"{k}\t{v}\n")
+    # print(sum([len(k)*v for k, v in tokens_freq.items()]))
+    # print(sum([r["token_num"] for r in results]))
+    # exit(0)
     
     # unit test
     # print(list("Hello World! ".encode("utf-8")) + [256] + list(" a good day!".encode("utf-8")))
-    num_merge = 10000
+    num_merge = 320000
     print("Before training: ", tokcli.encode("Hello World! <|endoftext|> a good day!"))
     tokcli.id_to_token = tokcli.build_reverse_vocab()
     print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World! <|endoftext|> a good day!")))
-    compression_ratio = tokcli.train(data, num_merge, tokens_freq)
+    compression_ratio = tokcli.train(None, num_merge, tokens_freq, init_token_num)
     print("After training: ", tokcli.encode("Hello World! a good day!"))
     print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World! <|endoftext|> a good day!")))
-    tokcli.save_vocab("./test_train_v1.txt")
+    tokcli.save_vocab(f"./{dataset_name}_bpe_parall.txt")
 
     # plot the compression ratio with merge
     real_num_merge = len(compression_ratio)
     print(f"Expect {num_merge} merges, but actually did {real_num_merge} merges.")
     num_merges = list(range(1, real_num_merge+1, 1))
-    plot_fig(num_merges, compression_ratio)
+    plot_fig(num_merges, compression_ratio, dataset_name)
 
     profiler.disable()
-    profiler.dump_stats("profile.prof")
+    profiler.dump_stats("profile_parall.prof")
 
+    # # test encode and decode
+    # tokcli = BytePairEncodeToken()
+    # tokcli.load_vocab(f"./{dataset_name}_bpe_parall.txt")
+    # print("Encoding result: ", tokcli.encode("Hello World! <|endoftext|> a good day!"))
+    # print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World! <|endoftext|> a good day!")))
+    # with open("../data/TinyStoriesV2-GPT4-valid.txt", "rb") as in_file:
+    #     for line in in_file:
+    #         # if count > 100: break
+    #         data = line.decode("utf-8", errors="ignore")
+    #         de_en_re = tokcli.decode(tokcli.encode(data))
+    #         if de_en_re != data:
+    #             print("======\nDecoding result: ", de_en_re, "\nOriginal: ", data, "\n======")
+    #             exit(0)
         
