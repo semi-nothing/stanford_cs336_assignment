@@ -51,7 +51,6 @@ class BytePairEncodeToken(object):
         self.special_tokens =  ["<|endoftext|>"]
         self.special_token_regex = re.compile("(" + "|".join(map(re.escape, self.special_tokens)) + ")")
 
-    @timeit
     def build_reverse_vocab(self) -> dict[int, tuple[int]]:
         return {v: k for k, v in self.vocab.items()}
 
@@ -122,6 +121,14 @@ class BytePairEncodeToken(object):
             else:
                 continue
         return tokens_freq, token_num
+
+    def get_byte_token(self, tokens_freq: dict[tuple[int], int]) -> dict[int, set[tuple[int]]]:
+        byte_token = defaultdict(set)
+        for token, _ in tokens_freq.items():
+            for b in token:
+                byte_token[b].add(token)
+        print("Uniq byte token num is: ", len(byte_token))
+        return byte_token
     
     def merge_pair(self, token: tuple[int], a: int, b: int, z: int) -> tuple[int]:
         """
@@ -147,7 +154,7 @@ class BytePairEncodeToken(object):
                 i += 1
         return tuple(new_token)
 
-    def merge(self, best_pair: tuple[int], tokens_freq: dict[tuple[int], int]) -> dict[tuple[int], int]:
+    def merge(self, best_pair: tuple[int], tokens_freq: dict[tuple[int], int], byte_token: dict[int, dict[tuple[int], int]], token_num: int) -> dict[tuple[int], int]:
         """
         Update the tokens_frequency by merging the best pair into a new token.
         Update the vocabulary including the new token.
@@ -161,36 +168,58 @@ class BytePairEncodeToken(object):
         :rtype: dict[tuple[int], int]
         """
         # update the vocabulary with the new token
-        new_tokens_freq = defaultdict(int)
-        new_token = (best_pair[0], best_pair[1])
-        self.vocab[new_token] = len(self.vocab)
+        b0, b1 = best_pair
+        self.vocab[best_pair] = len(self.vocab)
          # update tokens frequence by merging the best pair into a new token and updating the frequencies accordingly.
-        token_num = 0
-        for token_bs, freq in tokens_freq.items():
-            new_token_bs = self.merge_pair(token_bs, best_pair[0], best_pair[1], self.vocab[new_token])
-            new_tokens_freq[new_token_bs] = new_tokens_freq[new_token_bs] + freq
-            token_num += len(new_token_bs) * freq
-        return new_tokens_freq, token_num
+        keys0 = byte_token.get(b0)
+        keys1 = byte_token.get(b1)
+        if keys0 is None or keys1 is None:
+            return tokens_freq, byte_token
+        candidates = keys0 & keys1
+        new_tokens = set()
+        removed_tokens = set()
+        for token_bs in candidates:
+            if token_bs not in tokens_freq:
+                continue
+            new_token_bs = self.merge_pair(token_bs, b0, b1, self.vocab[best_pair])
+            if new_token_bs == token_bs:
+                continue
+            if new_token_bs not in tokens_freq:
+                tokens_freq[new_token_bs] = 0
+            tokens_freq[new_token_bs] += tokens_freq[token_bs]
+            token_num -= tokens_freq[token_bs]
+            new_tokens.add(new_token_bs)
+            removed_tokens.add(token_bs)
+            del tokens_freq[token_bs]
+        for token_bs in new_tokens:
+            for b in token_bs:
+                byte_token[b].add(token_bs)
+        for token_bs in removed_tokens:
+            for b in token_bs:
+                if token_bs not in byte_token[b]:
+                    continue
+                byte_token[b].remove(token_bs)
+        return tokens_freq, byte_token, token_num
     
     @timeit
-    def train(self, corpus: list[str], num_merges: int, tokens_freq: dict[tuple[bytes], int]=None, init_token_num: int=None) -> list[float]:
+    def train(self, corpus: list[str], num_merges: int, tokens_freq: dict[tuple[int], int]=None, init_token_num: int=None, byte_token: dict[int, set[tuple[int]]]=None) -> list[float]:
         if tokens_freq is None:
             tokens_freq, init_token_num = self.get_stats(corpus)
+            byte_token = self.get_byte_token(tokens_freq)
         compression_ratio = []
         token_num = init_token_num
-        for _ in range(num_merges):
+        for i in range(num_merges):
             pairs_freq = self._count_pairs(tokens_freq)
             if not pairs_freq:
                 break
-            best_pair = max(pairs_freq, key=pairs_freq.get)
-            best_pair_freq = pairs_freq[best_pair]
-            # best_pair, freq = max(pairs_freq.items(), key=lambda item: (item[1], item[0][0], item[0][1]))
+            best_pair, best_pair_freq = max(pairs_freq.items(), key=lambda item: (item[1], item[0]))
             print("Current are merging:", best_pair, best_pair_freq)
-            tokens_freq, new_token_num = self.merge(best_pair, tokens_freq)
-            # print("Calculated token reduced: ", best_pair_freq)
-            # print("Real token reduced: ", token_num - new_token_num)
-            compression_ratio.append((init_token_num*1.0)/new_token_num)
-            # print("Compression ratio: ", (init_token_num*1.0)/new_token_num)
+            tokens_freq, byte_token, new_token_num = self.merge(best_pair, tokens_freq, byte_token, token_num)
+            if i % 50 == 0:
+                # print("Calculated token reduced: ", best_pair_freq)
+                # print("Real token reduced: ", token_num - new_token_num)
+                compression_ratio.append((init_token_num*1.0)/new_token_num)
+                # print("Compression ratio: ", (init_token_num*1.0)/new_token_num)
             token_num = new_token_num
         self.id_to_token = self.build_reverse_vocab()
         return compression_ratio
@@ -317,7 +346,7 @@ def do_work_parallel(tokenizer, file_path: str, s: int, e: int, chunk_id: int):
                 tokens_freq_total = Counter(tokens_freq)
                 token_num_total = token_num
             else:
-                tokens_freq_total.update(Counter(tokens_freq))
+                tokens_freq_total += Counter(tokens_freq)
                 token_num_total += token_num
     
     return {"chunk_id": chunk_id, "tokens_freq": tokens_freq_total, "token_num": token_num_total}
@@ -375,21 +404,23 @@ if __name__ == "__main__":
     # print(sum([len(k)*v for k, v in tokens_freq.items()]))
     # print(sum([r["token_num"] for r in results]))
     # exit(0)
+
+    byte_token = tokcli.get_byte_token(tokens_freq)
     
     # unit test
     # print(list("Hello World! ".encode("utf-8")) + [256] + list(" a good day!".encode("utf-8")))
-    num_merge = 320000
+    num_merge = 10000
     print("Before training: ", tokcli.encode("Hello World! <|endoftext|> a good day!"))
     tokcli.id_to_token = tokcli.build_reverse_vocab()
     print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World! <|endoftext|> a good day!")))
-    compression_ratio = tokcli.train(None, num_merge, tokens_freq, init_token_num)
+    compression_ratio = tokcli.train(None, num_merge, tokens_freq, init_token_num, byte_token)
     print("After training: ", tokcli.encode("Hello World! a good day!"))
     print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World! <|endoftext|> a good day!")))
     tokcli.save_vocab(f"./{dataset_name}_bpe_parall.txt")
 
     # plot the compression ratio with merge
     real_num_merge = len(compression_ratio)
-    print(f"Expect {num_merge} merges, but actually did {real_num_merge} merges.")
+    # print(f"Expect {num_merge} merges, but actually did {real_num_merge} merges.")
     num_merges = list(range(1, real_num_merge+1, 1))
     plot_fig(num_merges, compression_ratio, dataset_name)
 

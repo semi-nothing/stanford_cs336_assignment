@@ -165,8 +165,12 @@ class BytePairEncodeToken(object):
          # update tokens frequence by merging the best pair into a new token and updating the frequencies accordingly.
         token_num = 0
         for token_bs, freq in tokens_freq.items():
+            if best_pair[0] not in token_bs or best_pair[1] not in token_bs:
+                new_tokens_freq[token_bs] += freq
+                token_num += len(token_bs) * freq
+                continue
             new_token_bs = self.merge_pair(token_bs, best_pair[0], best_pair[1], self.vocab[new_token])
-            new_tokens_freq[new_token_bs] = new_tokens_freq[new_token_bs] + freq
+            new_tokens_freq[new_token_bs] += freq
             token_num += len(new_token_bs) * freq
         return new_tokens_freq, token_num
     
@@ -179,9 +183,7 @@ class BytePairEncodeToken(object):
             pairs_freq = self._count_pairs(tokens_freq)
             if not pairs_freq:
                 break
-            best_pair = max(pairs_freq, key=pairs_freq.get)
-            best_pair_freq = pairs_freq[best_pair]
-            # best_pair, freq = max(pairs_freq.items(), key=lambda item: (item[1], item[0][0], item[0][1]))
+            best_pair, best_pair_freq = max(pairs_freq.items(), key=lambda item: (item[1], item[0]))
             print("Current are merging:", best_pair, best_pair_freq)
             tokens_freq, new_token_num = self.merge(best_pair, tokens_freq)
             # print("Calculated token reduced: ", best_pair_freq)
@@ -300,7 +302,7 @@ if __name__ == "__main__":
     data = load_data("../data/TinyStoriesV2-GPT4-train.txt")
 
     tokcli = BytePairEncodeToken()
-    # test to verify the init token freq is consistent between serial and parallel
+    # # test to verify the init token freq is consistent between serial and parallel
     # tokens_freq, init_token_num = tokcli.get_stats(data)
     # with open("serialize_token_freq.txt", "w+") as out_file:
     #     for k, v in tokens_freq.items():
