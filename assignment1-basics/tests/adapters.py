@@ -28,8 +28,14 @@ def run_linear(
     Returns:
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
+    from cs336_basics.transformer import LN
 
-    raise NotImplementedError
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    ln = LN(d_in, d_out, device, torch.float32)
+    ln.weight.data = weights.to(device)
+    in_features = in_features.to(device)
+
+    return ln(in_features).to("cpu")
 
 
 def run_embedding(
@@ -50,8 +56,13 @@ def run_embedding(
     Returns:
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
+    from cs336_basics.transformer import EMB
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    emb = EMB(vocab_size, d_model, device, torch.float32)
+    emb.embedding_weight.data = weights.to(device)
+    token_ids = token_ids.to(device)
 
-    raise NotImplementedError
+    return emb(token_ids).to("cpu")
 
 
 def run_swiglu(
@@ -80,10 +91,16 @@ def run_swiglu(
     # If your state dict keys match, you can use `load_state_dict()`
     # swiglu.load_state_dict(weights)
     # You can also manually assign the weights
-    # swiglu.w1.weight.data = w1_weight
-    # swiglu.w2.weight.data = w2_weight
-    # swiglu.w3.weight.data = w3_weight
-    raise NotImplementedError
+    from cs336_basics.transformer import SwiGLUFFN
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    swiglu = SwiGLUFFN(d_model, d_ff, device, torch.float32)
+    swiglu.w1.weight.data = w1_weight.to(device)
+    swiglu.w2.weight.data = w2_weight.to(device)
+    swiglu.w3.weight.data = w3_weight.to(device)
+    in_features = in_features.to(device)
+
+    return swiglu(in_features).to("cpu")
 
 
 def run_scaled_dot_product_attention(
@@ -104,7 +121,10 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    raise NotImplementedError
+    from cs336_basics.transformer import ScaledDotProductAttn
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    sdpa = ScaledDotProductAttn().to(device)
+    return sdpa(Q.to(device), K.to(device), V.to(device), mask.to(device) if mask is not None else None).to("cpu")
 
 
 def run_multihead_self_attention(
@@ -138,7 +158,15 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    from cs336_basics.transformer import MHA
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    mha = MHA(d_model, num_heads, device, torch.float32)
+    mha.q_proj.weight.data = q_proj_weight.to(device)
+    mha.k_proj.weight.data = k_proj_weight.to(device)
+    mha.v_proj.weight.data = v_proj_weight.to(device)
+    mha.o_proj.weight.data = o_proj_weight.to(device)
+    in_features = in_features.to(device)
+    return mha(in_features).to("cpu")
 
 
 def run_multihead_self_attention_with_rope(
@@ -178,7 +206,16 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    from cs336_basics.transformer import MHA, RoPE
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    rope = RoPE(theta, d_model // num_heads, max_seq_len, device)
+    mha = MHA(d_model, num_heads, device, torch.float32)
+    mha.q_proj.weight.data = q_proj_weight.to(device)
+    mha.k_proj.weight.data = k_proj_weight.to(device)
+    mha.v_proj.weight.data = v_proj_weight.to(device)
+    mha.o_proj.weight.data = o_proj_weight.to(device)
+    in_features = in_features.to(device)
+    return mha(in_features, rope, token_positions).to("cpu")
 
 
 def run_rope(
@@ -200,7 +237,11 @@ def run_rope(
     Returns:
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
-    raise NotImplementedError
+    from cs336_basics.transformer import RoPE
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    rope = RoPE(theta, d_k, max_seq_len, device)
+    out = rope(in_query_or_key.to(device), token_positions.to(device))
+    return out.to("cpu")
 
 
 def run_transformer_block(
@@ -273,7 +314,23 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    from cs336_basics.transformer import RoPE, TransformerBlock, SoftMax
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    d_k = d_model // num_heads
+    rope = RoPE(theta, d_k, max_seq_len, device)
+    softmax = SoftMax()
+    transformer_block = TransformerBlock(d_model, num_heads, d_ff, 1e-5, device, torch.float32)
+    transformer_block.ln1.g.data = weights["ln1.weight"].to(device)
+    transformer_block.ln2.g.data = weights["ln2.weight"].to(device)
+    transformer_block.mha.q_proj.weight.data = weights["attn.q_proj.weight"].to(device)
+    transformer_block.mha.k_proj.weight.data = weights["attn.k_proj.weight"].to(device)
+    transformer_block.mha.v_proj.weight.data = weights["attn.v_proj.weight"].to(device)
+    transformer_block.mha.o_proj.weight.data = weights["attn.output_proj.weight"].to(device)
+    transformer_block.ffn.w1.weight.data = weights["ffn.w1.weight"].to(device)
+    transformer_block.ffn.w2.weight.data = weights["ffn.w2.weight"].to(device)
+    transformer_block.ffn.w3.weight.data = weights["ffn.w3.weight"].to(device)
+    token_positions = torch.arange(in_features.shape[1], device=device)
+    return transformer_block(in_features.to(device), softmax, rope, token_positions).to("cpu")
 
 
 def run_transformer_lm(
@@ -355,7 +412,12 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    from cs336_basics.transformer import RoPE, TransformerBlock, SoftMax, TransformerLM
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    d_k = d_model // num_heads
+    transformer = TransformerLM(vocab_size, d_model, num_heads, num_layers, d_ff, theta=rope_theta, max_seq_len=context_length, device=device, dtype=torch.float32)
+    transformer.load_state_dict(weights)
+    return transformer(in_indices).to("cpu")
 
 
 def run_rmsnorm(
@@ -378,7 +440,11 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    raise NotImplementedError
+    from cs336_basics.transformer import RMSNorm
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    rms_norm = RMSNorm(d_model, eps, device=device, dtype=torch.float32)
+    rms_norm.g.data = weights.to(device)
+    return rms_norm(in_features.to(device)).to("cpu")
 
 
 def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
@@ -431,7 +497,10 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
         Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
-    raise NotImplementedError
+    from cs336_basics.transformer import SoftMax
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    softmax = SoftMax().to(device)
+    return softmax(in_features.to(device), dim).to("cpu")
 
 
 def run_cross_entropy(
