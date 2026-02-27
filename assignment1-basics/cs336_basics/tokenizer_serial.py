@@ -272,14 +272,13 @@ class BytePairEncodeToken(object):
         return b"".join(bytes([self.id_to_token[b]]) if b != 256 else b"<|endoftext|>" for b in bs).decode("utf-8", errors="strict")
 
 
-def plot_fig(X, Y):
+def plot_fig(X, Y, dataset_name):
     plt.figure()
     plt.plot(X, Y)
     plt.xlabel("Number of merges")
     plt.ylabel("Compression ratio")
-    plt.title("Compression Ratio vs Number of merges")
-    plt.show()
-    plt.savefig("./tinystory_compression_ratio_vs_merge_serial.png")
+    plt.title(f"{dataset_name} Compression Ratio vs Number of merges (Serial)")
+    plt.savefig(f"./{dataset_name}_compression_ratio_vs_merge_serial.png")
 
 @timeit
 def load_data(file_path:str) -> list[str]:
@@ -299,7 +298,11 @@ if __name__ == "__main__":
     profiler.enable()
 
     num_merge = 10000
-    data = load_data("../data/TinyStoriesV2-GPT4-train.txt")
+    file_path = "../data/TinyStoriesV2-GPT4-train.txt"
+    dataset_name = "tinystory"
+    # file_path = "../data/owt_train.txt"
+    # dataset_name = "owt"
+    data = load_data(file_path)
 
     tokcli = BytePairEncodeToken()
     # # test to verify the init token freq is consistent between serial and parallel
@@ -318,7 +321,7 @@ if __name__ == "__main__":
     compression_ratio = tokcli.train(data, num_merge)
     print("After training: ", tokcli.encode("Hello World! a good day!"))
     print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World! <|endoftext|> a good day!")))
-    tokcli.save_vocab("./tinystory_bpe_serial.txt")
+    tokcli.save_vocab(f"./{dataset_name}_bpe_serial.pkl")
 
     # plot the compression ratio with merge
     real_num_merge = len(compression_ratio)
