@@ -62,7 +62,7 @@ class BytePairEncodeToken(object):
         self.vocab = {i: i for i in range(257)} # 0-255 UTF-8 encoding code, 256 special token
         # self.vocab[b"<|endoftext|>"] = 256
     
-    def _count_pairs(self, tokens_freq: dict[tuple[int], int]) -> dict[tuple[int], int]:
+    def _count_pairs(self, tokens_freq: dict[tuple[int, ...], int]) -> dict[tuple[int, ...], int]:
         """
         Count frequency of adjacent byte pairs based on the pre-tokenized tokens frequency.
         
@@ -74,8 +74,11 @@ class BytePairEncodeToken(object):
         
         pairs = defaultdict(int)
         for token_bs, freq in tokens_freq.items():
-            for pair in zip(token_bs, token_bs[1:]):
-                pairs[pair] += freq
+            if len(token_bs) == 1:
+                continue
+            num_token = len(token_bs)
+            for i in range(num_token - 1):
+                pairs[(token_bs[i], token_bs[i+1])] += freq
         return pairs
     
     def pre_tokenize(self, text: str) -> list[tuple[int]]:
@@ -89,7 +92,10 @@ class BytePairEncodeToken(object):
         :rtype: list[tuple[int]]
         """
         # process special token
-        parts = self.special_token_regex.split(text)
+        if "<|endoftext|>" in text:
+            parts = self.special_token_regex.split(text)
+        else:
+            parts = [text]
         res = []
         for part in parts:
             if part not in self.special_tokens:
@@ -154,7 +160,9 @@ class BytePairEncodeToken(object):
                 i += 1
         return tuple(new_token)
 
-    def merge(self, best_pair: tuple[int], tokens_freq: dict[tuple[int], int], byte_token: dict[int, dict[tuple[int], int]], token_num: int) -> dict[tuple[int], int]:
+    def merge(self, best_pair: tuple[int, int], tokens_freq: dict[tuple[int, ...], int], 
+                byte_token: dict[int, dict[tuple[int, ...], int]], token_num: int,
+                count_pairs: dict[tuple[int, int], int]) -> tuple[dict[tuple[int, ...], int], dict[int, dict[tuple[int, ...], int]], int, dict[tuple[int, int], int]]:
         """
         Update the tokens_frequency by merging the best pair into a new token.
         Update the vocabulary including the new token.
@@ -190,7 +198,6 @@ class BytePairEncodeToken(object):
             token_num -= tokens_freq[token_bs]
             new_tokens.add(new_token_bs)
             removed_tokens.add(token_bs)
-            del tokens_freq[token_bs]
         for token_bs in new_tokens:
             for b in token_bs:
                 byte_token[b].add(token_bs)
@@ -199,7 +206,21 @@ class BytePairEncodeToken(object):
                 if token_bs not in byte_token[b]:
                     continue
                 byte_token[b].remove(token_bs)
-        return tokens_freq, byte_token, token_num
+        # update count_pairs
+        for token_bs in removed_tokens:
+            for i in range(len(token_bs) - 1):
+                pair = (token_bs[i], token_bs[i+1])
+                count_pairs[pair] -= tokens_freq[token_bs]
+        for token_bs in new_tokens:
+            for i in range(len(token_bs) - 1):
+                pair = (token_bs[i], token_bs[i+1])
+                if pair not in count_pairs:
+                    count_pairs[pair] = 0
+                count_pairs[pair] += tokens_freq[token_bs]
+        # delete the old tokens from tokens_freq
+        for token_bs in removed_tokens:
+            del tokens_freq[token_bs]
+        return tokens_freq, byte_token, token_num, count_pairs
     
     @timeit
     def train(self, corpus: list[str], num_merges: int, tokens_freq: dict[tuple[int], int]=None, init_token_num: int=None, byte_token: dict[int, set[tuple[int]]]=None) -> list[float]:
@@ -208,13 +229,15 @@ class BytePairEncodeToken(object):
             byte_token = self.get_byte_token(tokens_freq)
         compression_ratio = []
         token_num = init_token_num
+        # init count_pairs
+        count_pairs = self._count_pairs(tokens_freq)
         for i in range(num_merges):
-            pairs_freq = self._count_pairs(tokens_freq)
-            if not pairs_freq:
+            # find best pair
+            best_pair, best_pair_freq = max(count_pairs.items(), key=lambda x: (x[1], x[0]))
+            if best_pair is None:
                 break
-            best_pair, best_pair_freq = max(pairs_freq.items(), key=lambda item: (item[1], item[0]))
             print("Current are merging:", best_pair, best_pair_freq)
-            tokens_freq, byte_token, new_token_num = self.merge(best_pair, tokens_freq, byte_token, token_num)
+            tokens_freq, byte_token, new_token_num, count_pairs = self.merge(best_pair, tokens_freq, byte_token, token_num, count_pairs)
             if i % 50 == 0:
                 # print("Calculated token reduced: ", best_pair_freq)
                 # print("Real token reduced: ", token_num - new_token_num)
@@ -263,7 +286,7 @@ class BytePairEncodeToken(object):
         for bs in tokens:
             if bs != (256,):
                 while True:
-                    pairs = [pair for pair in zip(bs, bs[1:])]
+                    pairs = [(bs[i], bs[i+1]) for i in range(len(bs) - 1)]
                     candidates = [(self.vocab.get(pair), pair) for pair in pairs if pair in self.vocab]
                     if not candidates:
                         break
@@ -322,32 +345,44 @@ def load_data(file_path:str) -> list[str]:
             count += 1
     return data
 
-def do_work(tokenizer, file_path: str, s: int, e: int, chunk_id: int):
+def do_work(file_path: str, s: int, e: int, chunk_id: int):
     with open(file_path, "rb") as f:
         f.seek(s)
         chunk = f.read(e - s).decode("utf-8", errors="ignore")
     
     cur_corpus = chunk.split("\n")
     print(len(cur_corpus))
-    tokens_freq, token_num = tokenizer.get_stats(cur_corpus)
+    tokens_freq, token_num = tokcli.get_stats(cur_corpus)
     return {"chunk_id": chunk_id, "tokens_freq": tokens_freq, "token_num": token_num}
 
-def do_work_parallel(tokenizer, file_path: str, s: int, e: int, chunk_id: int):
+@timeit
+def do_work_parallel(file_path: str, s: int, e: int, chunk_id: int):
+    tokens_freq_total = Counter()
+    token_num_total = 0
     with open(file_path, "rb") as f:
-        boundaries = find_chunk_boundaries_2(f, 8, s, e, b"<|endoftext|>")
+        boundaries = find_chunk_boundaries_2(f, 4, s, e, b"<|endoftext|>")
         print(chunk_id, boundaries)
-    
-        for (cur_s, cur_e) in zip(boundaries, boundaries[1:]):
+
+        for i in range(len(boundaries) - 1):
+            cur_s = boundaries[i]
+            cur_e = boundaries[i+1]
+
             f.seek(cur_s)
-            chunk = f.read(cur_e - cur_s).decode("utf-8", errors="ignore")
-            cur_corpus = chunk.split("\n")
-            tokens_freq, token_num = tokenizer.get_stats(cur_corpus)
-            if cur_s == boundaries[0]:
-                tokens_freq_total = Counter(tokens_freq)
-                token_num_total = token_num
-            else:
+            chunk = f.read(cur_e - cur_s)
+
+            accu = []
+            for line in chunk.splitlines():
+                if not line: continue
+                accu.append(line.decode("utf-8", errors="ignore"))
+                if len(accu) == 10000:
+                    tokens_freq, token_num = tokcli.get_stats(accu)
+                    tokens_freq_total += Counter(tokens_freq)
+                    token_num_total += token_num
+                    accu = []
+            if accu:
+                tokens_freq, token_num = tokcli.get_stats(accu)
                 tokens_freq_total += Counter(tokens_freq)
-                token_num_total += token_num
+                token_num_total += token_num    
     
     return {"chunk_id": chunk_id, "tokens_freq": tokens_freq_total, "token_num": token_num_total}
 
@@ -357,6 +392,7 @@ if __name__ == "__main__":
     profiler = cProfile.Profile()
     profiler.enable()
 
+    global tokcli
     tokcli = BytePairEncodeToken()
 
     # parallel
@@ -374,13 +410,12 @@ if __name__ == "__main__":
 
     assert file_size==boundaries[-1], "Wrong file size."
 
-    ranges = list(zip(boundaries, boundaries[1:]))
+    ranges = [[boundaries[i], boundaries[i+1]] for i in range(len(boundaries) - 1)]
     print(ranges)
     with ProcessPoolExecutor(max_workers=num_processes) as ex:
         results = list(
             ex.map(
                 do_work_parallel,
-                [tokcli] * num_processes,
                 [file_path] * num_processes,
                 [s for s, _ in ranges],
                 [e for _, e in ranges],
@@ -409,14 +444,14 @@ if __name__ == "__main__":
     
     # unit test
     # print(list("Hello World! ".encode("utf-8")) + [256] + list(" a good day!".encode("utf-8")))
-    num_merge = 10000
+    num_merge = 32000
     print("Before training: ", tokcli.encode("Hello World! <|endoftext|> a good day!"))
     tokcli.id_to_token = tokcli.build_reverse_vocab()
     print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World! <|endoftext|> a good day!")))
     compression_ratio = tokcli.train(None, num_merge, tokens_freq, init_token_num, byte_token)
     print("After training: ", tokcli.encode("Hello World! a good day!"))
     print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World! <|endoftext|> a good day!")))
-    tokcli.save_vocab(f"./{dataset_name}_bpe_parall.txt")
+    tokcli.save_vocab(f"./{dataset_name}_bpe_parall.pkl")
 
     # plot the compression ratio with merge
     real_num_merge = len(compression_ratio)
