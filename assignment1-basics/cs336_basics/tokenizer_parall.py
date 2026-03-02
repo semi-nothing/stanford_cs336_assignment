@@ -200,6 +200,8 @@ class BytePairEncodeToken(object):
             removed_tokens.add(token_bs)
         for token_bs in new_tokens:
             for b in token_bs:
+                if b not in byte_token:
+                    byte_token[b] = set()
                 byte_token[b].add(token_bs)
         for token_bs in removed_tokens:
             for b in token_bs:
@@ -397,8 +399,8 @@ if __name__ == "__main__":
 
     # parallel
     num_processes = 8
-    # file_path = "../data/TinyStoriesV2-GPT4-train.txt"
-    # dataset_name = "tinystory"
+    file_path = "../data/TinyStoriesV2-GPT4-train.txt"
+    dataset_name = "tinystory"
     file_path = "../data/owt_train.txt"
     dataset_name = "owt"
 
@@ -475,4 +477,25 @@ if __name__ == "__main__":
     #         if de_en_re != data:
     #             print("======\nDecoding result: ", de_en_re, "\nOriginal: ", data, "\n======")
     #             exit(0)
+
+    # # encode data into ids
+    # tokcli = BytePairEncodeToken()
+    # tokcli.load_vocab(f"./{dataset_name}_bpe_parall.txt")
+    # print("Encoding result: ", tokcli.encode("Hello World! <|endoftext|> a good day!"))
+    # print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World! <|endoftext|> a good day!")))
+    # out_file = open("../data/TinyStoriesV2-GPT4-train_encoded.txt", "w+")
+    # count = 1
+    # with open("../data/TinyStoriesV2-GPT4-train.txt", "rb") as in_file:
+    #     for line in in_file:
+    #         # if count > 100000: break
+    #         # if count % 1000 == 0:
+    #         #     print(len(tokcli.vocab), len(getattr(tokcli, "cache", {})), len(getattr(tokcli, "byte_token", {})))
+    #         count += 1
+    #         data = line.decode("utf-8", errors="ignore").strip()
+    #         if data == "": continue
+    #         encoded_data = tokcli.encode(data)
+    #         out_file.write(" ".join(str(x) for x in encoded_data) + "\n")
+    #         if count % 10000 == 0:
+    #             out_file.flush()
+    # out_file.close()
         
