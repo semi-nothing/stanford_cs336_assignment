@@ -272,12 +272,13 @@ class BytePairEncodeToken(object):
         return b"".join(bytes([self.id_to_token[b]]) if b != 256 else b"<|endoftext|>" for b in bs).decode("utf-8", errors="strict")
 
 
-def plot_fig(X, Y, dataset_name):
+def plot_fig(X, Y, dataset_name="dataset"):
     plt.figure()
     plt.plot(X, Y)
     plt.xlabel("Number of merges")
     plt.ylabel("Compression ratio")
-    plt.title(f"{dataset_name} Compression Ratio vs Number of merges (Serial)")
+    plt.title(f"Compression Ratio vs Number of merges for {dataset_name}")
+    plt.show()
     plt.savefig(f"./{dataset_name}_compression_ratio_vs_merge_serial.png")
 
 @timeit
@@ -297,12 +298,11 @@ if __name__ == "__main__":
     profiler = cProfile.Profile()
     profiler.enable()
 
-    num_merge = 10000
-    file_path = "../data/TinyStoriesV2-GPT4-train.txt"
-    dataset_name = "tinystory"
-    # file_path = "../data/owt_train.txt"
-    # dataset_name = "owt"
-    data = load_data(file_path)
+    num_merge = 32000
+    # data = load_data("../data/TinyStoriesV2-GPT4-train.txt")
+    # dataset_name = "tinystory"
+    data = load_data("../data/owt_train.txt")
+    dataset_name = "owt"
 
     tokcli = BytePairEncodeToken()
     # # test to verify the init token freq is consistent between serial and parallel
@@ -320,14 +320,14 @@ if __name__ == "__main__":
     print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World! <|endoftext|> a good day!")))
     compression_ratio = tokcli.train(data, num_merge)
     print("After training: ", tokcli.encode("Hello World! a good day!"))
-    print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World! <|endoftext|> a good day!")))
-    tokcli.save_vocab(f"./{dataset_name}_bpe_serial.pkl")
+    print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World!  a good day!")))
+    tokcli.save_vocab(f"./{dataset_name}_bpe_serial.txt")
 
     # plot the compression ratio with merge
     real_num_merge = len(compression_ratio)
     print(f"Expect {num_merge} merges, but actually did {real_num_merge} merges.")
     num_merges = list(range(1, real_num_merge+1, 1))
-    plot_fig(num_merges, compression_ratio)
+    plot_fig(num_merges, compression_ratio, dataset_name=dataset_name)
 
     profiler.disable()
     profiler.dump_stats("profile_serial.prof")
