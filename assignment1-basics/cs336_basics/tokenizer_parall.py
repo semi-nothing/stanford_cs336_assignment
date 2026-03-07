@@ -390,49 +390,49 @@ def do_work_parallel(file_path: str, s: int, e: int, chunk_id: int):
 
 # Test
 if __name__ == "__main__":
-    # monitor the function cost
-    profiler = cProfile.Profile()
-    profiler.enable()
+    # # monitor the function cost
+    # profiler = cProfile.Profile()
+    # profiler.enable()
 
-    global tokcli
-    tokcli = BytePairEncodeToken()
+    # global tokcli
+    # tokcli = BytePairEncodeToken()
 
     # parallel
     num_processes = 8
-    file_path = "../data/TinyStoriesV2-GPT4-train.txt"
-    dataset_name = "tinystory"
+    # file_path = "../data/TinyStoriesV2-GPT4-train.txt"
+    # dataset_name = "tinystory"
     file_path = "../data/owt_train.txt"
     dataset_name = "owt"
 
-    with open(file_path, "rb") as f:
-        f.seek(0, os.SEEK_END)
-        file_size = f.tell()
-        boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
-        print(boundaries)
+    # with open(file_path, "rb") as f:
+    #     f.seek(0, os.SEEK_END)
+    #     file_size = f.tell()
+    #     boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
+    #     print(boundaries)
 
-    assert file_size==boundaries[-1], "Wrong file size."
+    # assert file_size==boundaries[-1], "Wrong file size."
 
-    ranges = [[boundaries[i], boundaries[i+1]] for i in range(len(boundaries) - 1)]
-    print(ranges)
-    with ProcessPoolExecutor(max_workers=num_processes) as ex:
-        results = list(
-            ex.map(
-                do_work_parallel,
-                [file_path] * num_processes,
-                [s for s, _ in ranges],
-                [e for _, e in ranges],
-                list(range(num_processes)),
-            )
-        )
-    # merge
-    init_token_num = 0
-    for i, r in enumerate(results):
-        init_token_num += r["token_num"]
-        if i == 0:
-            tokens_freq = Counter(r["tokens_freq"])
-        else:
-            tokens_freq += Counter(r["tokens_freq"])
-    tokens_freq = dict(tokens_freq)
+    # ranges = [[boundaries[i], boundaries[i+1]] for i in range(len(boundaries) - 1)]
+    # print(ranges)
+    # with ProcessPoolExecutor(max_workers=num_processes) as ex:
+    #     results = list(
+    #         ex.map(
+    #             do_work_parallel,
+    #             [file_path] * num_processes,
+    #             [s for s, _ in ranges],
+    #             [e for _, e in ranges],
+    #             list(range(num_processes)),
+    #         )
+    #     )
+    # # merge
+    # init_token_num = 0
+    # for i, r in enumerate(results):
+    #     init_token_num += r["token_num"]
+    #     if i == 0:
+    #         tokens_freq = Counter(r["tokens_freq"])
+    #     else:
+    #         tokens_freq += Counter(r["tokens_freq"])
+    # tokens_freq = dict(tokens_freq)
 
     # # test to verify the init token freq is consistent between serial and parallel
     # with open("parallel_token_freq.txt", "w+") as out_file:
@@ -442,27 +442,27 @@ if __name__ == "__main__":
     # print(sum([r["token_num"] for r in results]))
     # exit(0)
 
-    byte_token = tokcli.get_byte_token(tokens_freq)
+    # byte_token = tokcli.get_byte_token(tokens_freq)
     
-    # unit test
-    # print(list("Hello World! ".encode("utf-8")) + [256] + list(" a good day!".encode("utf-8")))
-    num_merge = 32000
-    print("Before training: ", tokcli.encode("Hello World! <|endoftext|> a good day!"))
-    tokcli.id_to_token = tokcli.build_reverse_vocab()
-    print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World! <|endoftext|> a good day!")))
-    compression_ratio = tokcli.train(None, num_merge, tokens_freq, init_token_num, byte_token)
-    print("After training: ", tokcli.encode("Hello World! a good day!"))
-    print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World! <|endoftext|> a good day!")))
-    tokcli.save_vocab(f"./{dataset_name}_bpe_parall.pkl")
+    # # unit test
+    # # print(list("Hello World! ".encode("utf-8")) + [256] + list(" a good day!".encode("utf-8")))
+    # num_merge = 32000
+    # print("Before training: ", tokcli.encode("Hello World! <|endoftext|> a good day!"))
+    # tokcli.id_to_token = tokcli.build_reverse_vocab()
+    # print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World! <|endoftext|> a good day!")))
+    # compression_ratio = tokcli.train(None, num_merge, tokens_freq, init_token_num, byte_token)
+    # print("After training: ", tokcli.encode("Hello World! a good day!"))
+    # print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World! <|endoftext|> a good day!")))
+    # tokcli.save_vocab(f"./{dataset_name}_bpe_parall.pkl")
 
-    # plot the compression ratio with merge
-    real_num_merge = len(compression_ratio)
-    # print(f"Expect {num_merge} merges, but actually did {real_num_merge} merges.")
-    num_merges = list(range(1, real_num_merge+1, 1))
-    plot_fig(num_merges, compression_ratio, dataset_name)
+    # # plot the compression ratio with merge
+    # real_num_merge = len(compression_ratio)
+    # # print(f"Expect {num_merge} merges, but actually did {real_num_merge} merges.")
+    # num_merges = list(range(1, real_num_merge+1, 1))
+    # plot_fig(num_merges, compression_ratio, dataset_name)
 
-    profiler.disable()
-    profiler.dump_stats("profile_parall.prof")
+    # profiler.disable()
+    # profiler.dump_stats("profile_parall.prof")
 
     # # test encode and decode
     # tokcli = BytePairEncodeToken()
@@ -478,24 +478,26 @@ if __name__ == "__main__":
     #             print("======\nDecoding result: ", de_en_re, "\nOriginal: ", data, "\n======")
     #             exit(0)
 
-    # # encode data into ids
-    # tokcli = BytePairEncodeToken()
-    # tokcli.load_vocab(f"./{dataset_name}_bpe_parall.txt")
-    # print("Encoding result: ", tokcli.encode("Hello World! <|endoftext|> a good day!"))
-    # print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World! <|endoftext|> a good day!")))
-    # out_file = open("../data/TinyStoriesV2-GPT4-train_encoded.txt", "w+")
-    # count = 1
-    # with open("../data/TinyStoriesV2-GPT4-train.txt", "rb") as in_file:
-    #     for line in in_file:
-    #         # if count > 100000: break
-    #         # if count % 1000 == 0:
-    #         #     print(len(tokcli.vocab), len(getattr(tokcli, "cache", {})), len(getattr(tokcli, "byte_token", {})))
-    #         count += 1
-    #         data = line.decode("utf-8", errors="ignore").strip()
-    #         if data == "": continue
-    #         encoded_data = tokcli.encode(data)
-    #         out_file.write(" ".join(str(x) for x in encoded_data) + "\n")
-    #         if count % 10000 == 0:
-    #             out_file.flush()
-    # out_file.close()
+    # encode data into ids
+    tokcli = BytePairEncodeToken()
+    print("Loading vocab from ", f"./{dataset_name}_bpe_parall.pkl")
+    tokcli.load_vocab(f"./{dataset_name}_bpe_parall.pkl")
+    print("Encoding result: ", tokcli.encode("Hello World! <|endoftext|> a good day!"))
+    print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World! <|endoftext|> a good day!")))
+    out_file = open("../data/owt_train_encoded.txt", "w+")
+    count = 1
+    with open("../data/owt_train.txt", "rb") as in_file:
+        for line in in_file:
+            if count > 100000: break
+            if count % 10000 == 0:
+                print(len(tokcli.vocab), len(getattr(tokcli, "cache", {})), len(getattr(tokcli, "byte_token", {})))
+            count += 1
+            data = line.decode("utf-8", errors="ignore").strip()
+            if data == "": continue
+            encoded_data = tokcli.encode(data)
+            out_file.write(" ".join(str(x) for x in encoded_dat a) + "\n")
+            if count % 10000 == 0:
+                out_file.flush()
+    out_file.flush()
+    out_file.close()
         

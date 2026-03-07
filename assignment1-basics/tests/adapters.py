@@ -510,15 +510,18 @@ def run_cross_entropy(
     loss across examples.
 
     Args:
-        inputs (Float[Tensor, "batch_size vocab_size"]): inputs[i][j] is the
+        inputs (Float[Tensor, "... vocab_size"]): inputs[i][j] is the
             unnormalized logit of jth class for the ith example.
-        targets (Int[Tensor, "batch_size"]): Tensor of shape (batch_size,) with the index of the correct class.
+        targets (Int[Tensor, "..."]): Tensor of shape (...) with the index of the correct class.
             Each value must be between 0 and `num_classes - 1`.
 
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    raise NotImplementedError
+    from cs336_basics.train_llm import cross_entropy
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    return cross_entropy(inputs.to(device), targets.to(device)).to("cpu")
+
 
 
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
@@ -530,14 +533,18 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    raise NotImplementedError
+    from cs336_basics.train_llm import gradient_clipping
+    gradient_clipping(parameters, max_l2_norm)
 
 
 def get_adamw_cls() -> Any:
     """
     Returns a torch.optim.Optimizer that implements AdamW.
     """
-    raise NotImplementedError
+    from cs336_basics.train_llm import AdamW
+
+    opt = AdamW()
+    return opt
 
 
 def run_get_lr_cosine_schedule(
@@ -565,7 +572,8 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
-    raise NotImplementedError
+    from cs336_basics.train_llm import get_lr_cosine_schedule
+    return get_lr_cosine_schedule(it, max_learning_rate, min_learning_rate, warmup_iters, cosine_cycle_iters)
 
 
 def run_save_checkpoint(
