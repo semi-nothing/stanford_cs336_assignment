@@ -182,7 +182,7 @@ class BytePairEncodeToken(object):
         keys0 = byte_token.get(b0)
         keys1 = byte_token.get(b1)
         if keys0 is None or keys1 is None:
-            return tokens_freq, byte_token
+            return tokens_freq, byte_token, token_num, count_pairs
         candidates = keys0 & keys1
         new_tokens = set()
         removed_tokens = set()
