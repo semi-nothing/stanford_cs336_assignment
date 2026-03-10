@@ -543,8 +543,7 @@ def get_adamw_cls() -> Any:
     """
     from cs336_basics.train_llm import AdamW
 
-    opt = AdamW()
-    return opt
+    return AdamW
 
 
 def run_get_lr_cosine_schedule(
@@ -592,7 +591,9 @@ def run_save_checkpoint(
             we've completed.
         out (str | os.PathLike | BinaryIO | IO[bytes]): Path or file-like object to serialize the model, optimizer, and iteration to.
     """
-    raise NotImplementedError
+    from cs336_basics.train_llm import save_checkpoint
+
+    save_checkpoint(model, optimizer, iteration, out)
 
 
 def run_load_checkpoint(
@@ -613,7 +614,9 @@ def run_load_checkpoint(
     Returns:
         int: the previously-serialized number of iterations.
     """
-    raise NotImplementedError
+    from cs336_basics.train_llm import load_checkpoint
+
+    return load_checkpoint(src, model, optimizer)
 
 
 def get_tokenizer(

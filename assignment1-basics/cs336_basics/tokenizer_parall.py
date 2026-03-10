@@ -288,12 +288,19 @@ class BytePairEncodeToken(object):
         for bs in tokens:
             if bs != (256,):
                 while True:
-                    pairs = [(bs[i], bs[i+1]) for i in range(len(bs) - 1)]
-                    candidates = [(self.vocab.get(pair), pair) for pair in pairs if pair in self.vocab]
-                    if not candidates:
+                    best_id = None
+                    best_pair = None
+                    for i in range(len(bs) - 1):
+                        pair = (bs[i], bs[i+1])
+                        pair_id = self.vocab.get(pair, -1)
+                        if pair_id == -1: continue
+                        if best_id is None or pair_id < best_id:
+                            best_id = pair_id
+                            best_pair = pair
+                    
+                    if best_pair is None:
                         break
-                    idx, (a,b) = min(candidates)
-                    bs = self.merge_pair(bs, a, b, idx)
+                    bs = self.merge_pair(bs, best_pair[0], best_pair[1], best_id)
             ids.extend(bs)
         return ids
 
@@ -478,26 +485,26 @@ if __name__ == "__main__":
     #             print("======\nDecoding result: ", de_en_re, "\nOriginal: ", data, "\n======")
     #             exit(0)
 
-    # encode data into ids
-    tokcli = BytePairEncodeToken()
-    print("Loading vocab from ", f"./{dataset_name}_bpe_parall.pkl")
-    tokcli.load_vocab(f"./{dataset_name}_bpe_parall.pkl")
-    print("Encoding result: ", tokcli.encode("Hello World! <|endoftext|> a good day!"))
-    print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World! <|endoftext|> a good day!")))
-    out_file = open("../data/owt_train_encoded.txt", "w+")
-    count = 1
-    with open("../data/owt_train.txt", "rb") as in_file:
-        for line in in_file:
-            if count > 100000: break
-            if count % 10000 == 0:
-                print(len(tokcli.vocab), len(getattr(tokcli, "cache", {})), len(getattr(tokcli, "byte_token", {})))
-            count += 1
-            data = line.decode("utf-8", errors="ignore").strip()
-            if data == "": continue
-            encoded_data = tokcli.encode(data)
-            out_file.write(" ".join(str(x) for x in encoded_dat a) + "\n")
-            if count % 10000 == 0:
-                out_file.flush()
-    out_file.flush()
-    out_file.close()
+    # # encode data into ids
+    # tokcli = BytePairEncodeToken()
+    # print("Loading vocab from ", f"./{dataset_name}_bpe_parall.pkl")
+    # tokcli.load_vocab(f"./{dataset_name}_bpe_parall.pkl")
+    # print("Encoding result: ", tokcli.encode("Hello World! <|endoftext|> a good day!"))
+    # print("Decoding result: ", tokcli.decode(tokcli.encode("Hello World! <|endoftext|> a good day!")))
+    # out_file = open("../data/owt_train_encoded.txt", "w+")
+    # count = 1
+    # with open("../data/owt_train.txt", "rb") as in_file:
+    #     for line in in_file:
+    #         if count > 100000: break
+    #         if count % 10000 == 0:
+    #             print(len(tokcli.vocab), len(getattr(tokcli, "cache", {})), len(getattr(tokcli, "byte_token", {})))
+    #         count += 1
+    #         data = line.decode("utf-8", errors="ignore").strip()
+    #         if data == "": continue
+    #         encoded_data = tokcli.encode(data)
+    #         out_file.write(" ".join(str(x) for x in encoded_dat a) + "\n")
+    #         if count % 10000 == 0:
+    #             out_file.flush()
+    # out_file.flush()
+    # out_file.close()
         
