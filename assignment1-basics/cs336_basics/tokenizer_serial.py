@@ -257,19 +257,22 @@ class BytePairEncodeToken(object):
 
         return res
 
-    def decode(self, ids: list[int]) -> str:
+    def decode(self, ids: list[int], errors: str = "strict") -> str:
         """
         Decode a list of token ids back into a string using the trained BPE vocabulary.
         
         :param ids: list of token ids to be decoded back into a string.
         :type ids: list[int]
+        :param errors: how to handle invalid UTF-8 sequences during decoding.
+        :type errors: str
         :return: decoded string from the input token ids.
         :rtype: str
         """
         bs = []
         for id_ in ids:
             bs.extend(self.decode_id(id_))
-        return b"".join(bytes([self.id_to_token[b]]) if b != 256 else b"<|endoftext|>" for b in bs).decode("utf-8", errors="strict")
+        raw_bytes = b"".join(bytes([b]) if b != 256 else b"<|endoftext|>" for b in bs)
+        return raw_bytes.decode("utf-8", errors=errors)
 
 
 def plot_fig(X, Y, dataset_name="dataset"):

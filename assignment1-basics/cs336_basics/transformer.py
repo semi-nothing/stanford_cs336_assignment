@@ -62,6 +62,23 @@ class RMSNorm(nn.Module):
         return out.to(in_dtype)
 
 
+class SiLU(nn.Module):
+    def __init__(self,
+                d_model: int,
+                d_ff: int,
+                device: str=None,
+                dtype: torch.dtype=None) -> None:
+        super().__init__()
+        self.w1 = LN(d_model, d_ff, device, dtype)
+        self.w2 = LN(d_ff, d_model, device, dtype)
+
+    def forward(self, x: Float[torch.Tensor, "... d_model"]) -> Float[torch.Tensor, "... d_model"]:
+        p1 = self.w1(x)
+        silu = p1 * torch.sigmoid(p1)
+        out = self.w2(silu)
+        return out
+
+
 class SwiGLUFFN(nn.Module):
     def __init__(self, d_model: int,
             d_ff: int,

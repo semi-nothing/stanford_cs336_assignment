@@ -11,7 +11,8 @@ from typing import Optional
 from collections.abc import Callable, Iterable
 
 from data_utils import get_batch
-from transformer import TransformerLLM
+# from transformer import TransformerLLM
+from transformer_norope import TransformerLLM
 
 
 def cross_entropy(logits: Float[torch.Tensor, "... S V"], 
@@ -232,7 +233,7 @@ def save_checkpoint(model: torch.nn.Module,
 
 def load_checkpoint(src: str,
                     model: torch.nn.Module,
-                    optimizer: torch.optim.Optimizer,
+                    optimizer: torch.optim.Optimizer=None,
                     device: str="cpu") -> int:
     """
     Load the model and optimizer state from a file. Also the iteration number.
@@ -245,7 +246,8 @@ def load_checkpoint(src: str,
     res = torch.load(src, map_location=device)
 
     model.load_state_dict(res["model"])
-    optimizer.load_state_dict(res["optimizer"])
+    if optimizer is not None:
+        optimizer.load_state_dict(res["optimizer"])
 
     return res["iteration"]
 
@@ -262,7 +264,7 @@ def init_wandb(lr: float,
                 seq_length: int,
                 model_params: Optional[dict]=None) -> wandb.sdk.wandb_run.Run:
     config = {
-        "architecture": "transformer_basics",
+        "architecture": "transformer_postnorm",
         "dataset": "tinystory",
         "epochs": 1,
         "lr": lr,
@@ -370,7 +372,7 @@ def train(model: torch.nn.Module,
         gradient_clipping(model.parameters(), max_l2_norm, eps)
         opt.step()
 
-        if t != 0 and t % log_steps == 0:
+        if t % log_steps == 0:
             wandb_run.log({"train_loss": loss.item(), "learning_rate": cur_lr, "train_perplexity": perplexity(loss).item()}, step=t)
             print(f"Iteration {t}, loss {loss.item()}")
         if t != 0 and t % save_steps == 0:
@@ -417,8 +419,8 @@ if __name__ == "__main__":
     train_params = {
         "train_data_file": "../data/TinyStoriesV2-GPT4-train_encoded.bin",
         "val_data_file": "../data/TinyStoriesV2-GPT4-valid_encoded.bin",
-        "src": "../models/tinystory_transformer_basics/checkpoint.pt",
-        "out": "../models/tinystory_transformer_basics/checkpoint_{}.pt",
+        "src": "../models/tinystory_transformer_basics/checkpoint_postnorm.pt",
+        "out": "../models/tinystory_transformer_basics/checkpoint_postnorm_{}.pt",
         "lr": 5e-4,
         "lr_max": 5e-4,
         "lr_min": 1e-6,
